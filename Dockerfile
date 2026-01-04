@@ -42,18 +42,28 @@ RUN echo "Building with OMRS_API_URL=${OMRS_API_URL}"
 RUN echo "Building with OMRS_PUBLIC_PATH=${OMRS_PUBLIC_PATH}"
 
 # Assemble the SPA
-RUN node packages/tooling/openmrs/dist/cli.js assemble \
+RUN OMRS_API_URL=https://api.emr.hubuk.ng/openmrs \
+    OMRS_PUBLIC_PATH=${OMRS_PUBLIC_PATH} \
+    OMRS_PAGE_TITLE=${OMRS_PAGE_TITLE} \
+    node packages/tooling/openmrs/dist/cli.js assemble \
     --manifest \
     --mode config \
     --config spa-assemble-config.json \
     --target /app/spa
 
-# Build the final application
-RUN node packages/tooling/openmrs/dist/cli.js build \
+# Build the final application - explicitly pass env vars
+RUN OMRS_API_URL=https://api.emr.hubuk.ng/openmrs \
+    OMRS_PUBLIC_PATH=${OMRS_PUBLIC_PATH} \
+    OMRS_PAGE_TITLE=${OMRS_PAGE_TITLE} \
+    NODE_ENV=production \
+    node packages/tooling/openmrs/dist/cli.js build \
     --target /app/spa
 
 # Verify the build output
 RUN ls -la /app/spa/
+
+# Verify apiUrl was correctly injected
+RUN grep -o 'apiUrl: "[^"]*"' /app/spa/index.html || echo "Warning: apiUrl not found in index.html"
 
 # -----------------------------------------------------------------------------
 # Stage 2: Production Stage - serve
