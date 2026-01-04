@@ -7,17 +7,17 @@
 # -----------------------------------------------------------------------------
 FROM --platform=$BUILDPLATFORM node:22-alpine AS builder
 
-# Build arguments
-ARG APP_SHELL_VERSION=next
-ARG CACHE_BUST
-
-# OpenMRS build-time environment variables (used by webpack)
-# OMRS_API_URL - Set via build arg if backend is on different host
+# Build arguments - can be overridden at build time
 ARG OMRS_API_URL=https://api.emr.hubuk.ng/openmrs
+ARG OMRS_PUBLIC_PATH=/openmrs/spa
+ARG OMRS_PAGE_TITLE=OpenMRS
+ARG OMRS_OFFLINE=disable
+
+# Set environment variables for webpack build
 ENV OMRS_API_URL=https://api.emr.hubuk.ng/openmrs
-ENV OMRS_PUBLIC_PATH=/openmrs/spa
-ENV OMRS_PAGE_TITLE=OpenMRS
-ENV OMRS_OFFLINE=disable
+ENV OMRS_PUBLIC_PATH=${OMRS_PUBLIC_PATH}
+ENV OMRS_PAGE_TITLE=${OMRS_PAGE_TITLE}
+ENV OMRS_OFFLINE=${OMRS_OFFLINE}
 ENV NODE_ENV=production
 
 WORKDIR /app
@@ -37,6 +37,10 @@ RUN yarn turbo run build
 # Copy SPA assembly configuration
 COPY spa-assemble-config.json ./
 
+# Debug: Print environment variables to verify they're set
+RUN echo "Building with OMRS_API_URL=${OMRS_API_URL}"
+RUN echo "Building with OMRS_PUBLIC_PATH=${OMRS_PUBLIC_PATH}"
+
 # Assemble the SPA
 RUN node packages/tooling/openmrs/dist/cli.js assemble \
     --manifest \
@@ -48,25 +52,38 @@ RUN node packages/tooling/openmrs/dist/cli.js assemble \
 RUN node packages/tooling/openmrs/dist/cli.js build \
     --target /app/spa
 
+# Verify the build output
+RUN ls -la /app/spa/
+
 # -----------------------------------------------------------------------------
-# Stage 2: Production Stage - nginx
+# Stage 2: Production Stage - serve
 # -----------------------------------------------------------------------------
-FROM nginx:1.25-alpine AS production
+FROM node:22-alpine AS production
 
-# Remove default nginx config
-RUN rm /etc/nginx/conf.d/default.conf
+# Install serve globally
+RUN npm install -g serve@14
 
-# Copy custom nginx config
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Create non-root user for security
+RUN addgroup -g 1001 -S openmrs && \
+    adduser -S -D -H -u 1001 -s /sbin/nologin -G openmrs openmrs
 
-# Copy built application
-COPY --from=builder /app/spa /usr/share/nginx/html/openmrs/spa
+WORKDIR /app
 
-# Expose port 80
-EXPOSE 80
+# Create the directory structure
+RUN mkdir -p /app/openmrs/spa
 
-# Health check
+# Copy built application to the correct path
+COPY --from=builder --chown=openmrs:openmrs /app/spa /app/openmrs/spa
+
+# Copy serve configuration
+COPY --chown=openmrs:openmrs serve.json ./
+
+# Switch to non-root user
+USER openmrs
+
+EXPOSE 3000
+
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost/openmrs/spa/ || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/openmrs/spa/ || exit 1
 
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["serve", "-c", "serve.json", "-l", "3000"]
